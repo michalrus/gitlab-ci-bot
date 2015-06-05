@@ -90,5 +90,5 @@ use warnings;
   }
 }
 
-my $pid = MyWebServer->new(8089)->run(); #background();
-print "pid = $pid\n";
+my $pid = MyWebServer->new(8089)->background();
+print "Daemonizing; pid = $pid.\n";
