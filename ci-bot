@@ -61,6 +61,9 @@ use warnings;
     # can it be merged?... when to notify about that?
     my $can_be_merged = 't' eq query("SELECT m.merge_status = 'can_be_merged' FROM merge_requests AS m WHERE m.id = $id");
 
+    # is it [WIP]
+    my $wip = (query("SELECT m.title FROM merge_requests AS m WHERE m.id = $id") =~ /^\s*(wip\s|\[wip\])/i);
+
     # last message of @ci-bot
     my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
     $my_last_msg = '' unless defined($my_last_msg);
@@ -68,9 +71,11 @@ use warnings;
     # current-state message
     my $current_msg = "**${num_lgtms}** LGTM(s) down";
     my $should_merge;
-    if ($num_lgtms > 0 && !$can_be_merged) {
+    if ($num_lgtms > 0 && $wip) {
+      $current_msg .= '. However, a **work-in-progress** branch will not be merged.';
+    } elsif ($num_lgtms > 0 && !$can_be_merged) {
       my $author = query("SELECT u.username FROM users AS u, merge_requests AS m WHERE u.id = m.author_id AND m.id = $id");
-      $current_msg .= '. However, this **cannot be merged** automatically. @' . $author . ', rebase.';
+      $current_msg .= '. However, this **cannot be merged** automatically. @' . $author . ', merge the upstream first.';
     } elsif ($num_lgtms < REQUIRED_LGTMS) {
       $current_msg .= ", **" . (REQUIRED_LGTMS-$num_lgtms) . "** more to go.";
     } else {
