@@ -11,6 +11,11 @@ use warnings;
   use JSON;
   #use Data::Dumper;
 
+  use constant MY_HANDLE => 'ci-bot';
+  use constant REQUIRED_LGTMS => 10;
+  use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
+  use constant GITLAB_URL => 'https://projects.michalrus.com';
+
   sub handle_request {
     my $self = shift;
     my $cgi  = shift;
@@ -27,36 +32,59 @@ use warnings;
     }
   }
 
+  sub query {
+    my $res = shift;
+    $SIG{CHLD} = sub { wait(); };
+    open(Q, "-|", 'psql', '-Atd', 'gitlab', '-c', $res);
+    chomp($res) if (defined($res = <Q>));
+    close Q;
+    return $res;
+  }
+
   sub process_mr {
-    my $project_id = shift;
-    my $iid = shift;
+    my $project_id = 0 + shift;
+    my $iid = 0 + shift;
+    my $res;
     warn "Processing !$iid in project $project_id.\n";
 
-# is it not closed? get the real id
-#   psql -A -t -d gitlab -c "SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = 4 AND m.iid = 6 AND m.state != 'closed'"
-# ... or ignore if empty
+    # is it not closed? get the real id
+    my $id = query("SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = $project_id AND m.iid = $iid AND m.state != 'closed'");
+    return unless defined($id);
 
-# notes.id of the last push to this MR:
-#   psql -A -t -d gitlab -c "SELECT n.id FROM merge_requests AS m, notes AS n WHERE m.id = n.noteable_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND m.iid = 6 AND n.system = 't' AND n.note LIKE 'Added % commit%' ORDER BY n.id DESC LIMIT 1"
-# ... or substitute 0 if empty
+    # notes.id of the last push to this MR:
+    my $last_push_note_id = query("SELECT n.id FROM notes AS n WHERE n.noteable_id = $id AND n.noteable_type = 'MergeRequest' AND n.system = 't' AND n.note LIKE 'Added % commit%' ORDER BY n.id DESC LIMIT 1");
+    $last_push_note_id = 0 unless defined($last_push_note_id);
 
-# number of distinct users doing LGBTs after the last push:
-#   psql -A -t -d gitlab -c "SELECT COUNT(DISTINCT u.username) FROM merge_requests AS m, notes AS n, users AS u WHERE m.id = n.noteable_id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND u.username != 'ci-bot' AND m.iid = 6 AND n.id > 297 AND n.system = 'f' AND note LIKE '%LGTM%'"
+    # number of distinct users doing LGBTs after the last push:
+    my $num_lgtms = 0 + query("SELECT COUNT(DISTINCT u.username) FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username != '".MY_HANDLE."' AND n.id > $last_push_note_id AND n.system = 'f' AND note LIKE '%LGTM%'");
 
-# can it be merged?... when to notify about that?
-#   psql -A -t -d gitlab -c "SELECT m.merge_status = 'can_be_merged' FROM merge_requests AS m WHERE m.target_project_id = 4 AND m.iid = 6"
-# ... should output: t
+    # can it be merged?... when to notify about that?
+    my $can_be_merged = 't' eq query("SELECT m.merge_status = 'can_be_merged' FROM merge_requests AS m WHERE m.id = $id");
 
-# last message of @ci-bot
-#   psql -A -t -d gitlab -c "SELECT n.note FROM merge_requests AS m, notes AS n, users AS u WHERE m.id = n.noteable_id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND u.username = 'ci-bot' AND m.iid = 6 AND n.system = 'f' ORDER BY n.id DESC LIMIT 1"
+    # last message of @ci-bot
+    my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
 
-# current-state message
+    # current-state message
+    my $current_msg = "**${num_lgtms}** LGTM(s) down";
+    my $should_merge;
+    if ($num_lgtms > 0 && !$can_be_merged) {
+      my $author = query("SELECT u.username FROM users AS u, merge_requests AS m WHERE u.id = m.author_id AND m.id = $id");
+      $current_msg .= '. However, this **cannot be merged** automatically. @' . $author . ', rebase.';
+    } elsif ($num_lgtms < REQUIRED_LGTMS) {
+      $current_msg .= ", **" . (REQUIRED_LGTMS-$num_lgtms) . "** more to go.";
+    } else {
+      $current_msg .= ". Merging.";
+      $should_merge = 1;
+    }
 
-# if current != last, post it
-#   curl --form note='**3** LGTM(s) down, **2** more to go.' --header "PRIVATE-TOKEN: CEbj8-9AGMHDJU4yBwsK" "https://projects.michalrus.com/api/v3/projects/4/merge_request/8/comments"
+    # if current != last, post it
+    unless ($current_msg eq $my_last_msg) {
+      system('curl', '-s', '-o', '/dev/null', '--form', 'note='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/comments');
+    }
 
-# if № LGBTs satisfied, merge
-
+    if ($should_merge) {
+      # if № LGBTs satisfied, merge
+    }
   }
 }
 
