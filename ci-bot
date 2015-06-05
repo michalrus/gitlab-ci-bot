@@ -12,7 +12,7 @@ use warnings;
   #use Data::Dumper;
 
   use constant MY_HANDLE => 'ci-bot';
-  use constant REQUIRED_LGTMS => 10;
+  use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://projects.michalrus.com';
 
@@ -63,6 +63,7 @@ use warnings;
 
     # last message of @ci-bot
     my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
+    $my_last_msg = '' unless defined($my_last_msg);
 
     # current-state message
     my $current_msg = "**${num_lgtms}** LGTM(s) down";
@@ -82,8 +83,9 @@ use warnings;
       system('curl', '-s', '-o', '/dev/null', '--form', 'note='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/comments');
     }
 
+    # if № LGBTs satisfied, merge
     if ($should_merge) {
-      # if № LGBTs satisfied, merge
+      system('curl', '-s', '-o', '/dev/null', '-X', 'PUT', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/merge');
     }
   }
 }
