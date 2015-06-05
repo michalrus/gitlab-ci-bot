@@ -9,7 +9,7 @@ use warnings;
   use HTTP::Server::Simple::CGI;
   use base qw(HTTP::Server::Simple::CGI);
   use JSON;
-  use Data::Dumper;
+  #use Data::Dumper;
 
   sub handle_request {
     my $self = shift;
@@ -19,8 +19,44 @@ use warnings;
       print "HTTP/1.1 400 Bad Request\r\n", $cgi->header, "400 Bad Request\n";
     } else {
       print "HTTP/1.1 200 OK\r\n", $cgi->header, "200 OK\n";
-      warn Dumper($hook), "\n";
+      if ($hook->{'object_kind'} eq 'merge_request') {
+        process_mr($hook->{'object_attributes'}->{'target_project_id'}, $hook->{'object_attributes'}->{'iid'});
+      } elsif ($hook->{'object_kind'} eq 'note' && defined $hook->{'merge_request'}) {
+        process_mr($hook->{'object_attributes'}->{'project_id'}, $hook->{'merge_request'}->{'iid'})
+      } # else { warn Dumper($hook), "\n"; }
     }
+  }
+
+  sub process_mr {
+    my $project_id = shift;
+    my $iid = shift;
+    warn "Processing !$iid in project $project_id.\n";
+
+# is it not closed? get the real id
+#   psql -A -t -d gitlab -c "SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = 4 AND m.iid = 6 AND m.state != 'closed'"
+# ... or ignore if empty
+
+# notes.id of the last push to this MR:
+#   psql -A -t -d gitlab -c "SELECT n.id FROM merge_requests AS m, notes AS n WHERE m.id = n.noteable_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND m.iid = 6 AND n.system = 't' AND n.note LIKE 'Added % commit%' ORDER BY n.id DESC LIMIT 1"
+# ... or substitute 0 if empty
+
+# number of distinct users doing LGBTs after the last push:
+#   psql -A -t -d gitlab -c "SELECT COUNT(DISTINCT u.username) FROM merge_requests AS m, notes AS n, users AS u WHERE m.id = n.noteable_id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND u.username != 'ci-bot' AND m.iid = 6 AND n.id > 297 AND n.system = 'f' AND note LIKE '%LGTM%'"
+
+# can it be merged?... when to notify about that?
+#   psql -A -t -d gitlab -c "SELECT m.merge_status = 'can_be_merged' FROM merge_requests AS m WHERE m.target_project_id = 4 AND m.iid = 6"
+# ... should output: t
+
+# last message of @ci-bot
+#   psql -A -t -d gitlab -c "SELECT n.note FROM merge_requests AS m, notes AS n, users AS u WHERE m.id = n.noteable_id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND m.target_project_id = 4 AND u.username = 'ci-bot' AND m.iid = 6 AND n.system = 'f' ORDER BY n.id DESC LIMIT 1"
+
+# current-state message
+
+# if current != last, post it
+#   curl --form note='**3** LGTM(s) down, **2** more to go.' --header "PRIVATE-TOKEN: CEbj8-9AGMHDJU4yBwsK" "https://projects.michalrus.com/api/v3/projects/4/merge_request/8/comments"
+
+# if № LGBTs satisfied, merge
+
   }
 }
 
