@@ -14,7 +14,7 @@ use warnings;
   use constant MY_HANDLE => 'ci-bot';
   use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
-  use constant GITLAB_URL => 'https://projects.michalrus.com';
+  use constant GITLAB_URL => 'https://git.michalrus.com';
 
   sub handle_request {
     my $self = shift;
