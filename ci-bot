@@ -15,6 +15,7 @@ use warnings;
   use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://git.michalrus.com';
+  use constant ACTION_DELAY => 1; # [s]... because 0 s is too fast for Ruby :-) and webhooks are not pinged about the new comment
 
   sub handle_request {
     my $self = shift;
@@ -85,11 +86,13 @@ use warnings;
 
     # if current != last, post it
     unless ($current_msg eq $my_last_msg) {
+      sleep ACTION_DELAY;
       system('curl', '-s', '-o', '/dev/null', '--form', 'note='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/comments');
     }
 
     # if № LGBTs satisfied, merge
     if ($should_merge) {
+      sleep ACTION_DELAY;
       system('curl', '-s', '-o', '/dev/null', '-X', 'PUT', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/merge');
     }
   }
