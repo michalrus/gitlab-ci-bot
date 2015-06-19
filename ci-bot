@@ -9,13 +9,14 @@ use warnings;
   use HTTP::Server::Simple::CGI;
   use base qw(HTTP::Server::Simple::CGI);
   use JSON;
+  use threads;
   #use Data::Dumper;
 
   use constant MY_HANDLE => 'ci-bot';
   use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://git.michalrus.com';
-  use constant ACTION_DELAY => 1; # [s]... because 0 s is too fast for Ruby :-) and webhooks are not pinged about the new comment
+  use constant PROCESS_DELAY => 4; # [s]... because 0 s is too fast for Ruby. :-) It has to have time to update postgres.
 
   sub handle_request {
     my $self = shift;
@@ -35,7 +36,6 @@ use warnings;
 
   sub query {
     my $res = shift;
-    $SIG{CHLD} = sub { wait(); };
     open(Q, "-|", 'psql', '-Atd', 'gitlab', '-c', $res);
     chomp($res) if (defined($res = <Q>));
     close Q;
@@ -43,10 +43,15 @@ use warnings;
   }
 
   sub process_mr {
+    $SIG{CHLD} = sub { wait(); };
+    threads->create(\&real_process_mr, @_)->detach();
+  }
+
+  sub real_process_mr {
     my $project_id = 0 + shift;
     my $iid = 0 + shift;
-    my $res;
     warn "Processing !$iid in project $project_id.\n";
+    sleep PROCESS_DELAY;
 
     # is it not closed? get the real id
     my $id = query("SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = $project_id AND m.iid = $iid AND m.state != 'closed'");
@@ -86,13 +91,11 @@ use warnings;
 
     # if current != last, post it
     unless ($current_msg eq $my_last_msg) {
-      sleep ACTION_DELAY;
-      system('curl', '-s', '-o', '/dev/null', '--form', 'note='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/comments');
+      system('curl', '-s', '-o', '/dev/null', '--form', 'body='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_requests/'.$id.'/notes');
     }
 
     # if № LGBTs satisfied, merge
     if ($should_merge) {
-      sleep ACTION_DELAY;
       system('curl', '-s', '-o', '/dev/null', '-X', 'PUT', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/merge');
     }
   }
