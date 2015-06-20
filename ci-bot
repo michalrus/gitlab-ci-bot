@@ -16,7 +16,7 @@ use warnings;
   use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://git.michalrus.com';
-  use constant PROCESS_DELAY => 4; # [s]... because 0 s is too fast for Ruby. :-) It has to have time to update postgres.
+  use constant PROCESS_DELAY => 5; # [s]... because 0 s is too fast for Ruby. :-) It has to have time to update postgres.
 
   sub handle_request {
     my $self = shift;
