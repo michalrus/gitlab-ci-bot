@@ -16,7 +16,10 @@ use warnings;
   use constant REQUIRED_LGTMS => 2;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://git.michalrus.com';
-  use constant PROCESS_DELAY => 5; # [s]... because 0 s is too fast for Ruby. :-) It has to have time to update postgres.
+
+  # retry while merge_state is 'unchecked'
+  use constant RETRY_DELAY => 1; # [s]
+  use constant RETRY_TIMES => 15; # after this many times assume 'cannot_be_merged'
 
   sub handle_request {
     my $self = shift;
@@ -27,9 +30,9 @@ use warnings;
     } else {
       print "HTTP/1.1 200 OK\r\n", $cgi->header, "200 OK\n";
       if ($hook->{'object_kind'} eq 'merge_request') {
-        process_mr($hook->{'object_attributes'}->{'target_project_id'}, $hook->{'object_attributes'}->{'iid'});
+        process_mr(RETRY_TIMES, $hook->{'object_attributes'}->{'target_project_id'}, $hook->{'object_attributes'}->{'iid'});
       } elsif ($hook->{'object_kind'} eq 'note' && defined $hook->{'merge_request'}) {
-        process_mr($hook->{'object_attributes'}->{'project_id'}, $hook->{'merge_request'}->{'iid'})
+        process_mr(RETRY_TIMES, $hook->{'object_attributes'}->{'project_id'}, $hook->{'merge_request'}->{'iid'})
       } # else { warn Dumper($hook), "\n"; }
     }
   }
@@ -48,14 +51,17 @@ use warnings;
   }
 
   sub real_process_mr {
+    my $retries_left = 0 + shift;
     my $project_id = 0 + shift;
     my $iid = 0 + shift;
     warn "Processing !$iid in project $project_id.\n";
-    sleep PROCESS_DELAY;
 
-    # is it not closed? get the real id
-    my $id = query("SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = $project_id AND m.iid = $iid AND m.state != 'closed'");
+    # is it neither closed nor merged? get the real id
+    my $id = query("SELECT m.id FROM merge_requests AS m WHERE m.target_project_id = $project_id AND m.iid = $iid AND m.state != 'closed' AND m.state != 'merged'");
     return unless defined($id);
+
+    # trigger merge_status checking with @michalrus' mod to GitLab
+    system('curl', '-s', '-o', '/dev/null', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id);
 
     # notes.id of the last push to this MR:
     my $last_push_note_id = query("SELECT n.id FROM notes AS n WHERE n.noteable_id = $id AND n.noteable_type = 'MergeRequest' AND n.system = 't' AND n.note LIKE 'Added % commit%' ORDER BY n.id DESC LIMIT 1");
@@ -64,11 +70,31 @@ use warnings;
     # number of distinct users doing LGBTs after the last push:
     my $num_lgtms = 0 + query("SELECT COUNT(DISTINCT u.username) FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username != '".MY_HANDLE."' AND n.id > $last_push_note_id AND n.system = 'f' AND note LIKE '%LGTM%'");
 
-    # can it be merged?... when to notify about that?
-    my $can_be_merged = 't' eq query("SELECT m.merge_status = 'can_be_merged' FROM merge_requests AS m WHERE m.id = $id");
-
     # is it [WIP]
-    my $wip = (query("SELECT m.title FROM merge_requests AS m WHERE m.id = $id") =~ /^\s*(wip\s|\[wip\])/i);
+    my $wip = (query("SELECT m.title FROM merge_requests AS m WHERE m.id = $id") =~ /^\s*(wip\W|\[wip\])/i);
+
+    # can it be merged automatically? The third state is 'unchecked' which means 'being checked now'
+    my $can_be_merged = 0;
+    my $cannot_be_merged = 0;
+
+    # really check for merge status if this is not work-in-progress
+    unless ($wip) {
+      if ($retries_left > 0) {
+        my $merge_status = query("SELECT m.merge_status FROM merge_requests AS m WHERE m.id = $id");
+        $can_be_merged    = 'can_be_merged'    eq $merge_status;
+        $cannot_be_merged = 'cannot_be_merged' eq $merge_status;
+      } else {
+        # assume unmergable
+        $cannot_be_merged = 1;
+      }
+
+      # wait and retry if merge_status is still 'unchecked'
+      unless ($can_be_merged || $cannot_be_merged) {
+        sleep RETRY_DELAY;
+        process_mr($retries_left - 1, $project_id, $iid);
+        return;
+      }
+    }
 
     # last message of @ci-bot
     my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
@@ -76,10 +102,10 @@ use warnings;
 
     # current-state message
     my $current_msg = "**${num_lgtms}** LGTM(s) down";
-    my $should_merge;
-    if ($num_lgtms > 0 && $wip) {
+    my $should_merge = 0;
+    if ($wip) {
       $current_msg .= '. However, a **work-in-progress** branch will not be merged.';
-    } elsif ($num_lgtms > 0 && !$can_be_merged) {
+    } elsif ($cannot_be_merged) {
       my $author = query("SELECT u.username FROM users AS u, merge_requests AS m WHERE u.id = m.author_id AND m.id = $id");
       $current_msg .= '. However, this **cannot be merged** automatically. @' . $author . ', merge the upstream first.';
     } elsif ($num_lgtms < REQUIRED_LGTMS) {
