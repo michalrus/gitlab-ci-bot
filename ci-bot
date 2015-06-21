@@ -17,10 +17,6 @@ use warnings;
   use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
   use constant GITLAB_URL => 'https://git.michalrus.com';
 
-  # retry while merge_state is 'unchecked'
-  use constant RETRY_DELAY => 1; # [s]
-  use constant RETRY_TIMES => 15; # after this many times assume 'cannot_be_merged'
-
   sub handle_request {
     my $self = shift;
     my $cgi  = shift;
@@ -30,9 +26,9 @@ use warnings;
     } else {
       print "HTTP/1.1 200 OK\r\n", $cgi->header, "200 OK\n";
       if ($hook->{'object_kind'} eq 'merge_request') {
-        process_mr(RETRY_TIMES, $hook->{'object_attributes'}->{'target_project_id'}, $hook->{'object_attributes'}->{'iid'});
+        process_mr($hook->{'object_attributes'}->{'target_project_id'}, $hook->{'object_attributes'}->{'iid'});
       } elsif ($hook->{'object_kind'} eq 'note' && defined $hook->{'merge_request'}) {
-        process_mr(RETRY_TIMES, $hook->{'object_attributes'}->{'project_id'}, $hook->{'merge_request'}->{'iid'})
+        process_mr($hook->{'object_attributes'}->{'project_id'}, $hook->{'merge_request'}->{'iid'})
       } # else { warn Dumper($hook), "\n"; }
     }
   }
@@ -51,7 +47,6 @@ use warnings;
   }
 
   sub real_process_mr {
-    my $retries_left = 0 + shift;
     my $project_id = 0 + shift;
     my $iid = 0 + shift;
     warn "Processing !$iid in project $project_id.\n";
@@ -74,27 +69,9 @@ use warnings;
     my $wip = (query("SELECT m.title FROM merge_requests AS m WHERE m.id = $id") =~ /^\s*(wip\W|\[wip\])/i);
 
     # can it be merged automatically? The third state is 'unchecked' which means 'being checked now'
-    my $can_be_merged = 0;
-    my $cannot_be_merged = 0;
-
-    # really check for merge status if this is not work-in-progress
-    unless ($wip) {
-      if ($retries_left > 0) {
-        my $merge_status = query("SELECT m.merge_status FROM merge_requests AS m WHERE m.id = $id");
-        $can_be_merged    = 'can_be_merged'    eq $merge_status;
-        $cannot_be_merged = 'cannot_be_merged' eq $merge_status;
-      } else {
-        # assume unmergable
-        $cannot_be_merged = 1;
-      }
-
-      # wait and retry if merge_status is still 'unchecked'
-      unless ($can_be_merged || $cannot_be_merged) {
-        sleep RETRY_DELAY;
-        process_mr($retries_left - 1, $project_id, $iid);
-        return;
-      }
-    }
+    my $merge_status = query("SELECT m.merge_status FROM merge_requests AS m WHERE m.id = $id");
+    my $can_be_merged    = 'can_be_merged'    eq $merge_status;
+    my $cannot_be_merged = 'cannot_be_merged' eq $merge_status;
 
     # last message of @ci-bot
     my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
