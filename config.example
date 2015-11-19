@@ -1,0 +1,4 @@
+my_handle => 'ci-bot',
+required_lgtms => 2,
+private_token => 'CEbj8-9AGMHDJU4yBwsK',
+gitlab_url => 'https://git.michalrus.com',

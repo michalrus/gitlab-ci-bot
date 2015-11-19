@@ -10,12 +10,10 @@ use warnings;
   use base qw(HTTP::Server::Simple::CGI);
   use JSON;
   use threads;
+  use File::Basename;
   #use Data::Dumper;
 
-  use constant MY_HANDLE => 'ci-bot';
-  use constant REQUIRED_LGTMS => 2;
-  use constant PRIVATE_TOKEN => 'CEbj8-9AGMHDJU4yBwsK';
-  use constant GITLAB_URL => 'https://git.michalrus.com';
+  my %config = do (dirname (__FILE__) . "/config");
 
   sub handle_request {
     my $self = shift;
@@ -56,14 +54,14 @@ use warnings;
     return unless defined($id);
 
     # trigger merge_status checking with @michalrus' mod to GitLab
-    system('curl', '-s', '-o', '/dev/null', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id);
+    system('curl', '-s', '-o', '/dev/null', '--header', 'PRIVATE-TOKEN: '.$config{private_token}, $config{gitlab_url}.'/api/v3/projects/'.$project_id.'/merge_request/'.$id);
 
     # notes.id of the last push to this MR:
     my $last_push_note_id = query("SELECT n.id FROM notes AS n WHERE n.noteable_id = $id AND n.noteable_type = 'MergeRequest' AND n.system = 't' AND n.note LIKE 'Added % commit%' ORDER BY n.id DESC LIMIT 1");
     $last_push_note_id = 0 unless defined($last_push_note_id);
 
     # number of distinct users doing LGBTs after the last push:
-    my $num_lgtms = 0 + query("SELECT COUNT(DISTINCT u.username) FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username != '".MY_HANDLE."' AND n.id > $last_push_note_id AND n.system = 'f' AND note LIKE '%LGTM%'");
+    my $num_lgtms = 0 + query("SELECT COUNT(DISTINCT u.username) FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username != '".$config{my_handle}."' AND n.id > $last_push_note_id AND n.system = 'f' AND note LIKE '%LGTM%'");
 
     # is it [WIP]
     my $wip = (query("SELECT m.title FROM merge_requests AS m WHERE m.id = $id") =~ /^\s*(wip\W|\[wip\])/i);
@@ -74,7 +72,7 @@ use warnings;
     my $cannot_be_merged = 'cannot_be_merged' eq $merge_status;
 
     # last message of @ci-bot
-    my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".MY_HANDLE."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
+    my $my_last_msg = query("SELECT n.note FROM notes AS n, users AS u WHERE n.noteable_id = $id AND u.id = n.author_id AND n.noteable_type = 'MergeRequest' AND u.username = '".$config{my_handle}."' AND n.system = 'f' ORDER BY n.id DESC LIMIT 1");
     $my_last_msg = '' unless defined($my_last_msg);
 
     # current-state message
@@ -85,8 +83,8 @@ use warnings;
     } elsif ($cannot_be_merged) {
       my $author = query("SELECT u.username FROM users AS u, merge_requests AS m WHERE u.id = m.author_id AND m.id = $id");
       $current_msg .= '. However, this **cannot be merged** automatically. @' . $author . ', merge the upstream first.';
-    } elsif ($num_lgtms < REQUIRED_LGTMS) {
-      $current_msg .= ", **" . (REQUIRED_LGTMS-$num_lgtms) . "** more to go.";
+    } elsif ($num_lgtms < $config{required_lgtms}) {
+      $current_msg .= ", **" . ($config{required_lgtms}-$num_lgtms) . "** more to go.";
     } else {
       $current_msg .= ". Merging.";
       $should_merge = 1;
@@ -94,12 +92,12 @@ use warnings;
 
     # if current != last, post it
     unless ($current_msg eq $my_last_msg) {
-      system('curl', '-s', '-o', '/dev/null', '--form', 'body='.$current_msg, '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_requests/'.$id.'/notes');
+      system('curl', '-s', '-o', '/dev/null', '--form', 'body='.$current_msg, '--header', 'PRIVATE-TOKEN: '.$config{private_token}, $config{gitlab_url}.'/api/v3/projects/'.$project_id.'/merge_requests/'.$id.'/notes');
     }
 
     # if № LGBTs satisfied, merge
     if ($should_merge) {
-      system('curl', '-s', '-o', '/dev/null', '-X', 'PUT', '--header', 'PRIVATE-TOKEN: '.PRIVATE_TOKEN, GITLAB_URL.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/merge');
+      system('curl', '-s', '-o', '/dev/null', '-X', 'PUT', '--header', 'PRIVATE-TOKEN: '.$config{private_token}, $config{gitlab_url}.'/api/v3/projects/'.$project_id.'/merge_request/'.$id.'/merge');
     }
   }
 }
